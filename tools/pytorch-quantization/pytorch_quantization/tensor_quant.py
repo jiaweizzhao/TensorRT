@@ -336,24 +336,76 @@ def _tensor_quant(inputs, amax, num_bits=8, unsigned=False, narrow_range=True):
     if min_amax < 0:
         raise ValueError("Negative values in amax")
 
-    max_bound = torch.tensor((2.0**(num_bits - 1 + int(unsigned))) - 1.0, device=amax.device)
-    if unsigned:
-        min_bound = 0
-    elif narrow_range:
-        min_bound = -max_bound
-    else:
-        min_bound = -max_bound - 1
-    scale = max_bound / amax
+    # support log quantization
+    # choice
+    quant_mode = 'log' # or 'scale'
 
-    epsilon = 1. / (1<<24)
-    if min_amax <= epsilon:  # Treat amax smaller than minimum representable of fp16 0
-        zero_amax_mask = (amax <= epsilon)
-        scale[zero_amax_mask] = 0  # Value quantized with amax=0 should all be 0
+    if quant_mode == 'scale':
+        max_bound = torch.tensor((2.0**(num_bits - 1 + int(unsigned))) - 1.0, device=amax.device)
+        if unsigned:
+            min_bound = 0
+        elif narrow_range:
+            min_bound = -max_bound
+        else:
+            min_bound = -max_bound - 1
+        scale = max_bound / amax
 
-    outputs = torch.clamp((inputs * scale).round_(), min_bound, max_bound)
+        epsilon = 1. / (1<<24)
+        if min_amax <= epsilon:  # Treat amax smaller than minimum representable of fp16 0
+            zero_amax_mask = (amax <= epsilon)
+            scale[zero_amax_mask] = 0  # Value quantized with amax=0 should all be 0
 
-    if min_amax <= epsilon:
-        scale[zero_amax_mask] = 1.  # Return 1 makes more sense for values quantized to 0 with amax=0
+        outputs = torch.clamp((inputs * scale).round_(), min_bound, max_bound)
+
+        if min_amax <= epsilon:
+            scale[zero_amax_mask] = 1.  # Return 1 makes more sense for values quantized to 0 with amax=0
+    elif quant_mode == 'log':
+        # log quantization
+        # settings
+        unsigned_exp = False
+        base_factor = 16
+
+        if not unsigned:
+            num_bits = num_bits-1
+
+        if not unsigned_exp:
+            num_bits = num_bits-1
+
+        if num_bits < 0:
+            raise ValueError("Negative values in num_bits")
+
+        base_factor = base_factor*1.0
+        
+        max_e = (2.0**num_bits)-1.0
+        
+        if unsigned:
+            sign = torch.ones_like(inputs)
+        else:
+            sign = torch.sign(inputs)
+        is_nonzero_input = inputs.new_ones(inputs.shape)
+        is_nonzero_input[inputs==0] = 0
+
+        if not unsigned_exp:
+            min_exp = -1*max_e
+            max_exp = max_e 
+        else:
+            min_exp = 0
+            max_exp = max_e-1 # need to reserve max for v=0 for unsigned exponent
+
+        bound = torch.tensor((2.0**(max_exp/base_factor)), device=amax.device)
+        scale = bound/amax
+
+        epsilon = 1. / (1<<24)
+        if min_amax <= epsilon:  # Treat amax smaller than minimum representable of fp16 0
+            zero_amax_mask = (amax <= epsilon)
+            scale[zero_amax_mask] = 0  # Value quantized with amax=0 should all be 0
+
+        exponent = torch.clamp((base_factor*torch.log2(torch.abs(inputs*scale))).round_(), min_exp, max_exp)
+
+        outputs = sign*is_nonzero_input*(2.0**(exponent/base_factor))
+
+        if min_amax <= epsilon:
+            scale[zero_amax_mask] = 1.  # Return 1 makes more sense for values quantized to 0 with amax=0
 
     if input_dtype == torch.half:
         outputs = outputs.half()

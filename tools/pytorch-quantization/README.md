@@ -41,3 +41,8 @@ python setup.py install
 * Pytorch Quantization Toolkit [userguide](https://docs.nvidia.com/deeplearning/tensorrt/pytorch-quantization-toolkit/docs/userguide.html)
 * Quantization Basics [whitepaper](https://arxiv.org/abs/2004.09602)
 
+## Instruction on using log quantization 
+1. Forked the repo to you local directory, and follow "Install from source" instruction above.
+2. pip install -e pytorch-quantization
+3. In pytorch_quantization/tensor_quant:line 365-366, change settings for log quantization
+4. Follow examples/finetune_quant_resnet50.ipynb to see how the package works (basically one line of code 'quant_modules.initialize()')
